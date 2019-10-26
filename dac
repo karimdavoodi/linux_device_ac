@@ -1,0 +1,189 @@
+#!/bin/bash
+# chkconfig: 12345 99 1
+# description: This is a daemon particularly designed to manage accessibility of I/O devices.
+# Source function library
+#. /etc/rc.d/init.d/functions
+#DEBUG=1
+
+Start()
+{
+	echo "#Device Access Controller Configuration File. DO NOT MANUALLY CHANGE VALUES." >/etc/udev/rules.d/95-dac.rules 
+	echo '#Device Access Controller Blacklist File. DO NOT MAKE ANY CHANGES.' >/etc/modprobe.d/dacconfig.conf
+	#Protection mechanism against rerun complications. 
+	for l in /sys/class/scsi_host/*; do	
+		echo "- - -" > $l/scan
+	done
+}
+General_options()
+{
+	cat /etc/dacconfig.conf | sed -n '/<general>/,/<\/general>/p' /etc/dacconfig.conf | egrep -v "#|<|^$" > /tmp/var1
+	var2=`wc -l /tmp/var1 | awk '{print $1}'`
+	for ((i=1; i<=$var2; i++))
+		do
+			cat /tmp/var1| head -$i | tail -1 > /tmp/var3
+			case `awk '{ print $1 }' /tmp/var3` in
+				enable_dac)
+					if ((`awk '{ print $3 }' /tmp/var3 ` ==0 )) ; then 
+						[ ! -z $DEBUG ] && echo -e "Disable DAC. stop!\n" 
+						stop
+						exit 0
+					fi
+					;;
+				block_usb)
+					if ((`awk '{ print $3 }' /tmp/var3 ` ==1 )) ; then 
+						[ ! -z $DEBUG ] && echo -e "block usb" 
+						for l in /sys/bus/usb/devices/usb*; do	
+							echo "0" > $l/authorized_default
+						done
+					fi ;;
+				block_lp)
+					if ((`awk '{ print $3 }' /tmp/var3 ` ==1 )) ; then 
+						[ ! -z $DEBUG ] && echo -e "block lp" 
+						echo "blacklist usblp">>/etc/modprobe.d/dacconfig.conf ; 
+				    fi ;;
+				block_cdrom_auto)
+					if ((`awk '{ print $3 }' /tmp/var3 ` ==1 ))  ; then 
+						[ ! -z $DEBUG ] && echo -e "block cdrom auto" 
+						echo "install nls_utf8 /bin/true">>/etc/modprobe.d/dacconfig.conf; 
+				    fi ;;
+				block_floppy)
+					if ((`awk '{ print $3 }' /tmp/var3 ` ==1 )) ; then 
+						[ ! -z $DEBUG ] && echo -e "block floppy" 
+						echo "blacklist floppy">>/etc/modprobe.d/dacconfig.conf; 
+				    fi ;;
+				block_sound)
+					if ((`awk '{ print $3 }' /tmp/var3 ` ==1 )) ; then 
+						[ ! -z $DEBUG ] && echo -e "block sound" 
+						if [ -f /proc/asound/modules ] ; then 
+							echo "blacklist "`cat /proc/asound/modules | awk '{print $2}'`"">>/etc/modprobe.d/dacconfig.conf ; 
+						fi ; 
+					fi ;;
+				block_network)
+					if ((`awk '{ print $3 }' /tmp/var3 ` ==1 )) ; then  
+						[ ! -z $DEBUG ] && echo -e "block network" 
+						cat /proc/net/dev | egrep -v 'Inter|face|virbr|lo' |awk -F : '{print $1}' > /tmp/var4
+						var5=`wc -l /tmp/var4 | awk '{print $1}'`
+						for ((j=1; j<=$var5; j++))
+							do
+								var6=`cat /tmp/var4| head -$j | tail -1 | sed -e 's/^[ \t]*//'` 
+								[ ! -z $DEBUG ] && echo -e "\tblock net: $var6" 
+								echo "KERNEL==\"$var6\", RUN+=\"/bin/sh -c 'echo 0 >/sys/class/net/$var6/device/enable'\"" >>/etc/udev/rules.d/95-dac.rules
+							done
+					fi;;
+
+				esac 
+		done
+}
+USB()
+{
+	cat /etc/dacconfig.conf | sed -n '/<usb>/,/<\/usb>/p' /etc/dacconfig.conf | egrep -v "#|<|^$" > /tmp/var1
+	var2=`wc -l /tmp/var1 | awk '{print $1}'`
+	for ((i=1; i<=$var2; i++))
+		do
+			cat /tmp/var1| head -$i | tail -1 > /tmp/var3
+			[ ! -z $DEBUG ] && echo -e "allow usb " && cat /tmp/var3
+			echo "ACTION==\"add\", ATTR{idVendor}==\"`awk '{ print $1 }' /tmp/var3 `\", ATTR{idProduct}==\"`awk '{ print $2 }' /tmp/var3 `\", ATTR{serial}==\"`awk '{ print $3 }' /tmp/var3 `\" , RUN+=\"/bin/sh -c 'echo 1 >/sys/\$devpath/authorized'\"" >>/etc/udev/rules.d/95-dac.rules 
+	    done
+}
+Network()
+{
+	ifconfig | grep HWaddr| gawk '{print $1 "\t"  $5}'| egrep -v virbr1 > /tmp/var1
+	cat /etc/dacconfig.conf | sed -n '/<network>/,/<\/network>/p' /etc/dacconfig.conf | egrep -v "#|<|^$" > /tmp/var2
+	var3=`wc -l /tmp/var2 | awk '{print $1}'`
+	for ((i=1; i<=$var3; i++))
+		do
+			cat /tmp/var2| head -$i | tail -1>/tmp/var4
+			cat /tmp/var1| grep `awk '{ print $1 }' /tmp/var4` > /tmp/var5
+			[ ! -z $DEBUG ] && echo -e "block net interface " && cat /tmp/var5
+			if [[ `awk '{ print $2 }' /tmp/var4` == `awk '{ print $2 }' /tmp/var5 ` ]]; then 
+				echo "KERNEL==\"`awk '{ print $1 }' /tmp/var4`\", RUN+=\"/bin/sh -c 'echo 0 >/sys/class/net/`awk '{ print $1 }' /tmp/var4`/device/enable'\"" >>/etc/udev/rules.d/95-dac.rules ; 
+			fi
+		done  
+}
+HDD_CDROM()
+{
+	cat /etc/dacconfig.conf | sed -n '/<ide_scsi>/,/<\/ide_scsi>/p' /etc/dacconfig.conf | egrep -v "#|<|^$" > /tmp/var1
+	var2=`wc -l /tmp/var1 | awk '{print $1}'`
+	for ((i=1; i<=$var2; i++))
+	do
+		var3=`cat /tmp/var1 | head -$i | tail -1` 
+		[ ! -z $DEBUG ] && echo -e "block SCSI Device $var3" 
+		echo /sys/class/scsi_host/*/device/*/*/block/$var3 > /tmp/var2
+		echo "KERNEL==\"$var3*\", RUN+=\"/bin/sh -c 'echo 1 >"`cut -f-8 -d '/' /tmp/var2`"/delete'\"">>/etc/udev/rules.d/95-dac.rules
+    done
+}	
+view()
+{
+	echo "[USB Attributes]----------------------------"
+	lsusb  | grep "Bus"|grep "Device"|egrep -v "Linux Foundation"|tr -d ':'| awk '{print $2i":"$4}'>/tmp/var1
+	var2=`wc -l /tmp/var1 | awk '{print $1}'`
+#	echo USB_number:$var2
+	for ((i=1; i<=$var2; i++))
+		do
+#			lsusb -v -d `cat /tmp/var1| head -$i | tail -1| tr -d':' `| egrep 'iProduct|iManufacturer|idVendor|idProduct' | awk '{print $2}' 
+			lsusb -v -s `cat /tmp/var1| head -$i | tail -1 `| egrep 'idVendor' |      awk '{print "vendor:"$2}' 
+			lsusb -v -s `cat /tmp/var1| head -$i | tail -1 `| egrep 'idProduct' |     awk '{print "produc:"$2}' 
+			lsusb -v -s `cat /tmp/var1| head -$i | tail -1 `| egrep 'iManufacturer' | awk '{print "manufa:"$3}' 
+			lsusb -v -s `cat /tmp/var1| head -$i | tail -1 `| egrep 'iSerial' |       awk '{print "serial:"$3}' 
+		done
+#	lsusb -v | grep "Bus"|grep "Device"|egrep -v "Linux Foundation"| awk '{print $6" "$7" "$8" "$9}'
+	echo "[Network Cards]-----------------------------"
+	ifconfig | grep HWaddr| gawk '{print $1 "\t"  $5}'| egrep -v virbr
+	echo "[HDD and CD/DVD]---------------------------"
+	lsblk -o NAME,MODEL,SIZE -d |  egrep -v NAME 
+}
+
+stop() 
+{
+	if [ -e /etc/udev/rules.d/95-dac.rules  ] ; then 
+		rm -f /etc/udev/rules.d/95-dac.rules ; 
+	fi
+	if [ -e /etc/modprobe.d/dacconfig.conf ] ; then 
+		rm -f /etc/modprobe.d/dacconfig.conf ; 
+	fi
+	for l in /sys/bus/usb/devices/usb*; do	
+		echo "1" > $l/authorized_default
+	done
+}
+
+start()
+{ 
+	echo -e "Start Device Access Controller"
+	Start
+	General_options
+	USB
+	Network
+	HDD_CDROM
+	rm -f /tmp/var*
+	exit 0
+}
+################   Main ######################################################
+if [ `id -u` -ne 0 ]; then
+	echo "Permission denied." 
+	exit 2
+fi
+
+case "$1" in
+	start)
+		stop
+		start
+		udevadm trigger
+		;;
+	restart)
+		stop
+		start
+		udevadm trigger
+		;;
+	stop)
+		stop
+		udevadm trigger
+		;;
+	view)
+		view
+		;;
+    *)
+	   echo $"Usage: $0 {view|start|restart|stop}"$'\n'
+	   exit 1
+	   ;;
+esac
+exit 0
